@@ -1,16 +1,12 @@
 name: Build luci-app-xray for GL-MT6000 (Filogic)
 
 on:
-  workflow_dispatch: # 允许手动触发
+  workflow_dispatch:
   push:
-    branches: [ "main" ] # 推送到 main 分支时触发
-  schedule:
-    - cron: '0 10 * * 1' # 每周一早上10点(UTC)自动编译一次
+    branches: [ "main" ]
 
 env:
-  # 使用您提供的通用链接，避免版本号过期问题
-  SDK_URL: https://mirror-03.infra.openwrt.org/snapshots/targets/mediatek/filogic/openwrt-sdk-mediatek-filogic_gcc-14.3.0_musl.Linux-x86_64.tar.zst
-  # OpenWrt 软件源配置
+  SDK_URL: https://downloads.openwrt.org/snapshots/targets/mediatek/filogic/openwrt-sdk-mediatek-filogic_gcc-14.3.0_musl.Linux-x86_64.tar.zst
   FEEDS_CONF: |
     src-git packages https://git.openwrt.org/feed/packages.git
     src-git luci https://git.openwrt.org/project/luci.git
@@ -24,8 +20,11 @@ jobs:
     - name: Checkout this repository
       uses: actions/checkout@v4
 
-    - name: Install Zstd compression tool
-      run: sudo apt-get update && sudo apt-get install -y zstd
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y zstd build-essential libncurses5-dev libncursesw5-dev \
+        zlib1g-dev gawk git gettext libssl-dev xsltproc rsync wget unzip python3
 
     - name: Download and extract OpenWrt SDK
       run: |
@@ -36,38 +35,60 @@ jobs:
     - name: Setup feeds configuration
       run: echo "${{ env.FEEDS_CONF }}" > feeds.conf
 
-    - name: Update and install all feeds
+    - name: Update and install feeds
       run: |
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
     - name: Clone luci-app-xray source
       run: |
+        rm -rf package/luci-app-xray
         git clone https://github.com/yichya/luci-app-xray.git package/luci-app-xray
 
-    - name: Prepare configuration
+    - name: Prepare the build environment
       run: |
-        echo "CONFIG_PACKAGE_luci-app-xray=y" >> .config
-        make defconfig
+        # 创建符号链接确保编译系统能找到包
+        ln -sf $(pwd)/package/luci-app-xray $(pwd)/package/feeds/packages/luci-app-xray || true
+        ln -sf $(pwd)/package/luci-app-xray $(pwd)/package/feeds/luci/luci-app-xray || true
+        
+        # 确保包索引已更新
+        make package/index
+
+    - name: Check if package is detected
+      run: |
+        echo "Checking if luci-app-xray is detected by the build system..."
+        make package/luci-app-xray/check V=s || true
+        make package/luci-app-xray/prepare V=s || true
 
     - name: Compile luci-app-xray package
       run: |
-        make package/luci-app-xray/compile V=s
+        # 首先尝试直接编译
+        make package/luci-app-xray/compile V=s || \
+        # 如果失败，尝试先编译依赖
+        (make tools/install && make toolchain/install && make package/luci-app-xray/compile V=s)
 
     - name: List built packages
-      run: ls -la bin/packages/aarch64_cortex-a53/
+      run: |
+        find bin/ -name "*.ipk" | grep -E "(xray|luci-app-xray)" || true
+        ls -la bin/packages/ || true
 
     - name: Upload IPK files as artifact
+      if: success() || failure()
       uses: actions/upload-artifact@v4
       with:
         name: openwrt-ipks-for-mt6000
-        path: bin/packages/aarch64_cortex-a53/
+        path: |
+          bin/packages/*/base/
+          bin/packages/*/luci/
+          bin/packages/*/packages/
         retention-days: 7
 
-    - name: Upload compilation log
-      if: always() # 即使编译失败也上传日志
+    - name: Upload build log
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: build-log
-        path: build.log
+        path: |
+          logs/
+          build.log
         retention-days: 7
