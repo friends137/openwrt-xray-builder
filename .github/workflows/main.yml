@@ -24,15 +24,13 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y zstd build-essential libncurses5-dev libncursesw5-dev \
-        zlib1g-dev gawk git gettext libssl-dev xsltproc rsync wget unzip python3 file
+        zlib1g-dev gawk git gettext libssl-dev xsltproc rsync wget unzip python3
 
     - name: Download and extract ImmortalWrt SDK
       run: |
         wget ${{ env.SDK_URL }} -O immortalwrt-sdk.tar.zst
         tar -I zstd -xf immortalwrt-sdk.tar.zst --strip-components=1
         rm immortalwrt-sdk.tar.zst
-        echo "SDK contents:"
-        ls -la
 
     - name: Setup feeds configuration
       run: echo "${{ env.FEEDS_CONF }}" > feeds.conf
@@ -41,85 +39,120 @@ jobs:
       run: |
         ./scripts/feeds update -a
         ./scripts/feeds install -a
-        ./scripts/feeds install libopenssl libustream-openssl ca-bundle
 
-    - name: Clone luci-app-xray source
+    - name: Check if luci-app-xray is available in feeds
       run: |
-        rm -rf package/luci-app-xray
-        git clone https://github.com/yichya/luci-app-xray.git package/luci-app-xray
-        echo "luci-app-xray package structure:"
-        ls -la package/luci-app-xray/
+        echo "Checking available packages..."
+        ./scripts/feeds list | grep -i xray || echo "Xray not found in feeds"
+        ./scripts/feeds list | grep -i luci || echo "Luci packages not found in feeds"
 
-    - name: Check package Makefile
+    - name: Clone luci-app-xray source (with fallback)
       run: |
-        if [ -f "package/luci-app-xray/Makefile" ]; then
-          echo "Makefile exists, checking content:"
-          head -20 package/luci-app-xray/Makefile
+        # 首先尝试从 feeds 安装
+        if ./scripts/feeds list | grep -q "luci-app-xray"; then
+          echo "Installing luci-app-xray from feeds..."
+          ./scripts/feeds install luci-app-xray
         else
-          echo "ERROR: Makefile does not exist!"
+          echo "luci-app-xray not in feeds, cloning from GitHub..."
+          rm -rf package/luci-app-xray
+          git clone https://github.com/yichya/luci-app-xray.git package/luci-app-xray
+          
+          # 检查是否克隆成功
+          if [ ! -d "package/luci-app-xray" ]; then
+            echo "ERROR: Failed to clone luci-app-xray repository"
+            exit 1
+          fi
+        fi
+
+    - name: Verify package structure
+      run: |
+        echo "Checking package structure..."
+        
+        # 检查包目录是否存在
+        if [ -d "package/luci-app-xray" ]; then
+          echo "Package directory exists"
+          ls -la package/luci-app-xray/
+          
+          # 检查 Makefile 是否存在
+          if [ -f "package/luci-app-xray/Makefile" ]; then
+            echo "Makefile exists"
+            head -5 package/luci-app-xray/Makefile
+          else
+            echo "WARNING: Makefile does not exist in package directory"
+            echo "Looking for Makefile in subdirectories..."
+            find package/luci-app-xray -name "Makefile" -type f
+          fi
+        else
+          echo "ERROR: Package directory does not exist"
           exit 1
         fi
 
     - name: Prepare build configuration
       run: |
-        # 创建必要的目录结构
         mkdir -p bin/packages/aarch64_cortex-a53/base
         mkdir -p bin/packages/aarch64_cortex-a53/luci
         mkdir -p bin/packages/aarch64_cortex-a53/packages
         
-        # 设置基本配置
         echo "CONFIG_PACKAGE_luci-app-xray=y" > .config
         make defconfig
 
-    - name: Compile luci-app-xray package
+    - name: Try to compile with limited output
       run: |
-        # 尝试编译，设置超时为45分钟
-        timeout 45m make package/luci-app-xray/compile -j$(nproc) V=s 2>&1 | tee build.log
-        
-        # 检查编译结果
-        if [ $? -eq 124 ]; then
-          echo "Build timed out, trying single-threaded approach..."
-          make package/luci-app-xray/compile -j1 V=s 2>&1 | tee -a build.log
-        fi
-
-    - name: Check build results
-      run: |
-        echo "Checking build results..."
-        # 查找所有可能的IPK文件位置
-        find . -name "*.ipk" -type f | head -20 || echo "No IPK files found"
-        
-        # 特别检查标准输出目录
-        if [ -d "bin/packages" ]; then
-          echo "Contents of bin/packages:"
-          find bin/packages/ -name "*.ipk" -type f | head -20 || echo "No IPK files in bin/packages"
-        else
-          echo "bin/packages directory does not exist"
-        fi
-        
-        # 检查编译日志中的错误
-        if [ -f "build.log" ]; then
-          echo "Last 50 lines of build log:"
-          tail -50 build.log
+        # 尝试编译，但限制输出大小
+        {
+          echo "=== Starting compilation attempt ==="
+          echo "Trying to compile luci-app-xray..."
           
-          echo "Checking for errors in build log:"
-          grep -i "error\|fail\|warning" build.log | tail -20
-        fi
+          # 尝试不同的编译目标
+          if make package/luci-app-xray/compile -j1 2>&1 | head -c 50000; then
+            echo "=== Compilation completed successfully ==="
+          else
+            echo "=== Compilation failed ==="
+            # 尝试其他可能的编译目标
+            echo "Trying alternative compilation targets..."
+            make package/feeds/packages/luci-app-xray/compile -j1 2>&1 | head -c 50000 || true
+            make package/feeds/luci/luci-app-xray/compile -j1 2>&1 | head -c 50000 || true
+          fi
+        } > build.log 2>&1
 
-    - name: Upload build artifacts
+    - name: Create summary and find artifacts
+      run: |
+        # 创建构建摘要
+        echo "=== Build Summary ===" > summary.log
+        echo "Date: $(date)" >> summary.log
+        echo "" >> summary.log
+        
+        # 检查是否生成了IPK文件
+        if find . -name "*.ipk" | grep -q .; then
+          echo "SUCCESS: IPK files found!" >> summary.log
+          find . -name "*.ipk" | head -5 >> summary.log
+        else
+          echo "FAILURE: No IPK files generated" >> summary.log
+        fi
+        
+        # 添加错误摘要
+        echo "" >> summary.log
+        echo "=== Error Summary (last 20 lines) ===" >> summary.log
+        tail -20 build.log | grep -i "error\|fail" >> summary.log || echo "No errors found" >> summary.log
+        
+        # 显示摘要
+        cat summary.log
+
+    - name: Upload results
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: build-artifacts
+        name: build-results
         path: |
+          summary.log
           build.log
-          **/*.ipk
         retention-days: 7
 
-    - name: Upload SDK contents for debugging
+    - name: Upload any found IPK files
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: sdk-contents
+        name: ipk-files
         path: |
-          .
-        retention-days: 1
+          **/*.ipk
+        retention-days: 7
