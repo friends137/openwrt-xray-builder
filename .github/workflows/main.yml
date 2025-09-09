@@ -1,0 +1,58 @@
+name: Build OpenWrt IPK for MT6000
+
+on:
+  workflow_dispatch: # 允许手动触发工作流
+  push:
+    branches: [ "main" ] # 当代码推送到 main 分支时也触发编译
+  schedule:
+    - cron: '0 10 * * 1' # 可选：每周一早上10点自动编译一次（UTC时间），以获取最新代码
+
+env:
+  SDK_URL: https://downloads.openwrt.org/snapshots/targets/mediatek/mt7986/openwrt-sdk-24.10.2-mediatek-mt7986_gcc-12.3.0_musl.Linux-x86_64.tar.xz
+  FEEDS_CONF: |-
+    src-git packages https://git.openwrt.org/feed/packages.git
+    src-git luci https://git.openwrt.org/project/luci.git
+    src-git routing https://git.openwrt.org/feed/routing.git
+    src-git telephony https://git.openwrt.org/feed/telephony.git
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Download and extract OpenWrt SDK
+      run: |
+        wget ${{ env.SDK_URL }}
+        tar -xf openwrt-sdk-*.tar.xz --strip-components=1
+        rm openwrt-sdk-*.tar.xz
+
+    - name: Setup feeds.conf
+      run: |
+        echo "${{ env.FEEDS_CONF }}" > feeds.conf
+
+    - name: Update and install feeds
+      run: |
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: Clone luci-app-xray source
+      run: |
+        git clone https://github.com/yichya/luci-app-xray.git package/luci-app-xray
+
+    - name: Run menuconfig (optional, selects dependencies)
+      run: |
+        echo "CONFIG_PACKAGE_luci-app-xray=y" >> .config
+        make defconfig
+
+    - name: Compile luci-app-xray
+      run: |
+        make package/luci-app-xray/compile V=s
+
+    - name: Upload IPK as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: built-ipks
+        path: bin/packages/aarch64_cortex-a53/
+        retention-days: 7
