@@ -1,145 +1,145 @@
-name: Build Xray for GL-MT6000 (Filogic)
+name: Build and Release
 
 on:
-  workflow_dispatch:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
+      - dev
+    tags:
+      - "*"
+  workflow_dispatch:
 
 env:
-  SDK_URL: https://downloads.immortalwrt.org/snapshots/targets/mediatek/filogic/immortalwrt-sdk-mediatek-filogic_gcc-14.3.0_musl.Linux-x86_64.tar.zst
-  FEEDS_CONF: |
-    src-git packages https://git.openwrt.org/feed/packages.git
-    src-git luci https://git.openwrt.org/project/luci.git
-    src-git routing https://git.openwrt.org/feed/routing.git
-    src-git telephony https://git.openwrt.org/feed/telephony.git
+  PACKAGE_NAME: luci-app-xray
+  CACHE_DIR: ~/cache
 
 jobs:
-  build:
+  release:
+    name: Build for ${{ matrix.arch }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            sdk_url_path: https://downloads.openwrt.org/releases/23.05.5/targets/x86/64
+            sdk_name: -sdk-23.05.5-x86-64_
+
+    env:
+      SDK_URL_PATH: ${{ matrix.sdk_url_path }}
+      SDK_NAME: ${{ matrix.sdk_name }}
+      CCACHE_DIR: ~/.ccache
+      CONFIG_CCACHE: y
+
     steps:
-    - name: Checkout this repository
-      uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v3
 
-    - name: Install build dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y zstd build-essential libncurses5-dev libncursesw5-dev \
-        zlib1g-dev gawk git gettext libssl-dev xsltproc rsync wget unzip python3
+      - name: Prepare Cache Key
+        id: cache_key
+        run: echo "timestamp=$(date +%s)" >> $GITHUB_OUTPUT
 
-    - name: Download and extract ImmortalWrt SDK
-      run: |
-        wget ${{ env.SDK_URL }} -O immortalwrt-sdk.tar.zst
-        tar -I zstd -xf immortalwrt-sdk.tar.zst --strip-components=1
-        rm immortalwrt-sdk.tar.zst
+      - name: Setup Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.CACHE_DIR }}
+            ${{ env.CCACHE_DIR }}
+          key: openwrt-${{ matrix.arch }}-${{ env.PACKAGE_NAME }}-${{ steps.cache_key.outputs.timestamp }}
+          restore-keys: |
+            openwrt-${{ matrix.arch }}-${{ env.PACKAGE_NAME }}-
 
-    - name: Setup feeds configuration
-      run: echo "${{ env.FEEDS_CONF }}" > feeds.conf
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          DEBIAN_FRONTEND=noninteractive sudo apt-get install -y \
+            ccache gettext libncurses5-dev xsltproc p7zip-full
 
-    - name: Update and install feeds
-      run: |
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
+      - name: Create Directories
+        run: |
+          CACHE_DIR_SDK="$(eval echo "$CACHE_DIR/sdk")"
+          CACHE_DIR_DL="$(eval echo "$CACHE_DIR/dl")"
+          CACHE_DIR_FEEDS="$(eval echo "$CACHE_DIR/feeds")"
+          mkdir -p "$CACHE_DIR_SDK" "$CACHE_DIR_DL" "$CACHE_DIR_FEEDS"
+          echo "CACHE_DIR_SDK=$CACHE_DIR_SDK" >> $GITHUB_ENV
+          echo "CACHE_DIR_DL=$CACHE_DIR_DL" >> $GITHUB_ENV
+          echo "CACHE_DIR_FEEDS=$CACHE_DIR_FEEDS" >> $GITHUB_ENV
+          echo "SDK_HOME=$(mktemp -d)" >> $GITHUB_ENV
 
-    - name: Check available Xray packages
-      run: |
-        echo "Available Xray-related packages:"
-        ./scripts/feeds list | grep -i xray || echo "No Xray packages found in feeds"
-        
-        # 尝试安装Xray核心包
-        if ./scripts/feeds list | grep -q "xray"; then
-          echo "Installing Xray from feeds..."
-          ./scripts/feeds install xray
-        else
-          echo "Xray not available in feeds, trying alternative approach..."
-        fi
+      - name: Download and Unzip SDK
+        run: |
+          cd "$CACHE_DIR_SDK"
+          wget -q -O sha256sums "$SDK_URL_PATH/sha256sums"
+          grep -- "$SDK_NAME" sha256sums > sha256sums.small
+          SDK_FILE="$(cut -d' ' -f2 sha256sums.small | sed 's/*//g')"
+          if ! sha256sum -c sha256sums.small >/dev/null 2>&1; then
+            wget -q -O "$SDK_FILE" "$SDK_URL_PATH/$SDK_FILE"
+            sha256sum -c sha256sums.small
+          fi
+          cd -
+          7z x "$CACHE_DIR_SDK/$SDK_FILE" -so | tar -C "$SDK_HOME" -xvf - --strip=1
+          cd "$SDK_HOME"
+          rm -rf dl feeds
+          ln -s "$CACHE_DIR_DL" dl
+          ln -s "$CACHE_DIR_FEEDS" feeds
+          cp feeds.conf.default feeds.conf
+          sed -i 's#git.openwrt.org/openwrt/openwrt#github.com/openwrt/openwrt#' feeds.conf
+          sed -i 's#git.openwrt.org/feed/packages#github.com/openwrt/packages#' feeds.conf
+          sed -i 's#git.openwrt.org/project/luci#github.com/openwrt/luci#' feeds.conf
+          sed -i 's#git.openwrt.org/feed/telephony#github.com/openwrt/telephony#' feeds.conf
 
-    - name: Try to compile Xray core package
-      run: |
-        echo "=== Attempting to compile Xray core ==="
-        
-        # 尝试编译Xray核心包
-        if make package/xray/compile V=sc 2>&1 | head -c 100000 | tee build.log; then
-          echo "Xray core compilation completed"
-        else
-          echo "Xray core compilation failed"
-        fi
+      - name: Update and Install Feeds
+        run: |
+          cd "$SDK_HOME"
+          ./scripts/feeds update -a
+          ln -s "${{ github.workspace }}" "package/$PACKAGE_NAME"
+          ./scripts/feeds install -a
 
-    - name: Search for any build artifacts
-      run: |
-        echo "=== Searching for build artifacts ==="
-        
-        # 搜索所有可能的构建输出
-        echo "IPK files:"
-        find . -name "*.ipk" -type f | head -20 || echo "No IPK files found"
-        
-        echo "Build directories:"
-        find . -path "*/build_dir/*" -type d | head -5 || echo "No build directories found"
-        
-        echo "Package directories:"
-        find . -path "*/bin/packages/*" -type d | head -5 || echo "No package directories found"
-        
-        echo "All files in bin directory:"
-        find bin/ -type f 2>/dev/null | head -20 || echo "No files in bin directory"
+      - name: Build Package
+        run: |
+          cd "$SDK_HOME"
+          make defconfig
+          make package/${PACKAGE_NAME}/clean V=s
+          make package/${PACKAGE_NAME}/compile V=s
+          find "$SDK_HOME/bin/" -type f -name "*.ipk" -exec ls -lh {} \;
 
-    - name: Create diagnostic report
-      run: |
-        echo "=== Diagnostic Report ===" > diagnostic.log
-        echo "Date: $(date)" >> diagnostic.log
-        echo "" >> diagnostic.log
-        
-        # 检查编译日志
-        echo "Compilation status:" >> diagnostic.log
-        if tail -20 build.log | grep -q "built\|success\|complete"; then
-          echo "  - Compilation reported success" >> diagnostic.log
-        else
-          echo "  - Compilation may have failed" >> diagnostic.log
-        fi
-        
-        # 检查文件系统
-        echo "" >> diagnostic.log
-        echo "File system analysis:" >> diagnostic.log
-        echo "  - SDK structure:" >> diagnostic.log
-        ls -la | head -10 >> diagnostic.log
-        echo "" >> diagnostic.log
-        echo "  - Package directories:" >> diagnostic.log
-        find . -name "package" -type d | head -5 >> diagnostic.log
-        echo "" >> diagnostic.log
-        echo "  - Makefiles found:" >> diagnostic.log
-        find . -name "Makefile" | grep -i xray | head -5 >> diagnostic.log
-        
-        # 显示报告
-        cat diagnostic.log
+      - name: Copy Bin Files
+        run: |
+          mkdir -p "${{ github.workspace }}/output"
+          find "$SDK_HOME/bin/" -type f -name "${PACKAGE_NAME}*.ipk" -exec cp {} "${{ github.workspace }}/output/" \;
+          ls -lh "${{ github.workspace }}/output"
 
-    - name: Upload diagnostic information
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: diagnostic-info
-        path: |
-          diagnostic.log
-          build.log
-        retention-days: 7
+      - name: Upload Artifacts (for non-tag builds)
+        if: startsWith(github.ref, 'refs/tags/') == false
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.arch }}-packages
+          path: output/*.ipk
 
-    - name: Try alternative approach - download prebuilt packages
-      if: always()
-      run: |
-        echo "=== Attempting to download prebuilt packages ==="
-        
-        # 尝试从ImmortalWrt仓库下载预编译的Xray包
-        BASE_URL="https://downloads.immortalwrt.org/snapshots/packages/aarch64_cortex-a53/packages"
-        
-        # 尝试下载Xray相关包
-        wget -q "$BASE_URL/xray-core_1.8.4-1_aarch64_cortex-a53.ipk" || \
-        wget -q "$BASE_URL/xray-core_latest_aarch64_cortex-a53.ipk" || \
-        echo "Failed to download prebuilt Xray package"
-        
-        # 列出下载的文件
-        ls -la *.ipk 2>/dev/null || echo "No IPK files downloaded"
+      - name: Release and Upload Assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: output/*.ipk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Upload any found or downloaded packages
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: xray-packages
-        path: "*.ipk"
-        retention-days: 7
+  notify:
+    name: Notify Release Publish
+    runs-on: ubuntu-latest
+    env:
+      TRIGGER_URL: ${{ secrets.TRIGGER_URL }}
+      TRIGGER_TOKEN: ${{ secrets.TRIGGER_TOKEN }}
+    needs: release
+    steps:
+      - name: Notify Jenkins
+        run: |
+          if [ -z "$TRIGGER_URL" ] ; then
+            echo "::warning::No trigger url found, skip..."
+            exit 0
+          fi
+          curl -X POST \
+              -H "Content-Type: application/json; charset=utf-8" \
+              -H "Authorization: Bearer $TRIGGER_TOKEN" \
+              -d "{\"event\":\"release\",\"repository\":\"${{ github.repository }}\",\"ref\":\"${{ github.ref }}\"}" \
+              "$TRIGGER_URL" || true
