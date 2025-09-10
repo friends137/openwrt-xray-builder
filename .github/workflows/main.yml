@@ -32,14 +32,12 @@ jobs:
           cd sdk
           ./scripts/feeds update -a
           ./scripts/feeds install -a
+          # 删除有问题的 gensio 包
+          rm -rf feeds/packages/net/gensio
 
       - name: Configure Package Selection
         run: |
           cd sdk
-          # 禁用 gensio 循环依赖
-          echo "# CONFIG_PACKAGE_gensio is not set" >> .config
-          echo "# CONFIG_PACKAGE_gensio-bin is not set" >> .config
-          echo "# CONFIG_GENSIO_SSHD is not set" >> .config
           # 启用 xray-core / geodata / luci-app-xray
           echo "CONFIG_PACKAGE_xray-core=m" >> .config
           echo "CONFIG_PACKAGE_xray-geodata=m" >> .config
@@ -49,9 +47,9 @@ jobs:
       - name: Compile Xray Packages
         run: |
           cd sdk
-          make package/feeds/xray/xray-core/{clean,compile} -j$(nproc) V=s
-          make package/feeds/xray/xray-geodata/{clean,compile} -j$(nproc) V=s
-          make package/feeds/xray/luci-app-xray/{clean,compile} -j$(nproc) V=s
+          make package/feeds/xray/core/{clean,compile} -j$(nproc) V=s
+          make package/feeds/xray/geodata/{clean,compile} -j$(nproc) V=s
+          make package/feeds/xray/status/{clean,compile} -j$(nproc) V=s
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
