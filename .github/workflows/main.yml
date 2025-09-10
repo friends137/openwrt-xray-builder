@@ -1,4 +1,4 @@
-name: Build Xray for OpenWrt
+name: Build luci-app-xray
 
 on:
   workflow_dispatch:
@@ -24,48 +24,40 @@ jobs:
           wget https://downloads.immortalwrt.org/snapshots/targets/mediatek/filogic/immortalwrt-sdk-mediatek-filogic_gcc-14.3.0_musl.Linux-x86_64.tar.zst
           tar -I zstd -xf immortalwrt-sdk-mediatek-filogic_gcc-14.3.0_musl.Linux-x86_64.tar.zst
           mv immortalwrt-sdk-*/ sdk
-          cd sdk
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
 
-      - name: Clone xray packages
+      - name: Clone luci-app-xray only
         run: |
           cd sdk/package
           git clone https://github.com/yichya/openwrt-xray.git
-          # 里面包含 xray-core 和 luci-app-xray
+          # 只需要 luci-app-xray，其他目录可以删掉
+          find openwrt-xray -maxdepth 1 -type d ! -name luci-app-xray ! -name openwrt-xray -exec rm -rf {} +
 
-      - name: Patch config to avoid gensio/busybox errors
+      - name: Configure minimal build
         run: |
           cd sdk
-          # 硬删除 gensio，避免递归依赖
-          rm -rf feeds/packages/net/gensio || true
-          # 删除 busybox PAM 依赖
-          sed -i '/BUSYBOX_CONFIG_PAM/d' feeds/base/package/utils/busybox/config/Config.in || true
-
-      - name: Configure
-        run: |
-          cd sdk
+          rm -f .config
           cat >> .config <<EOF
-          CONFIG_PACKAGE_xray-core=m
+          CONFIG_TARGET_mediatek=y
+          CONFIG_TARGET_mediatek_filogic=y
+          CONFIG_TARGET_mediatek_filogic_generic=y
           CONFIG_PACKAGE_luci-app-xray=m
           EOF
           make defconfig
 
-      - name: Build
+      - name: Build luci-app-xray
         run: |
           cd sdk
-          make package/xray-core/compile -j$(nproc) V=s
-          make package/luci-app-xray/compile -j$(nproc) V=s
+          make package/openwrt-xray/luci-app-xray/compile -j$(nproc) V=s
 
       - name: Collect artifacts
         run: |
           mkdir -p output
-          find sdk/bin/packages/ -type f -name "*xray*.ipk" -exec cp {} output/ \;
+          find sdk/bin/packages/ -type f -name "*luci-app-xray*.ipk" -exec cp {} output/ \;
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: xray-ipk
+          name: luci-app-xray-ipk
           path: output/
 
       - name: Release
