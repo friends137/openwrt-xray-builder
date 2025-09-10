@@ -30,59 +30,50 @@ jobs:
       - name: Prepare luci-app-xray package
         run: |
           mkdir -p sdk/package/luci-app-xray
-          cd sdk/package/luci-app-xray
-          git clone https://github.com/yichya/luci-app-xray.git temp
-          
-          # 将 status 目录内容作为 package 文件
-          mv temp/status/* .
-          rm -rf temp
-          
-          # 创建必要的 Makefile（最小化示例）
-          cat > Makefile << 'EOF'
-  include $(TOPDIR)/rules.mk
-  LUCI_TITLE:=LuCI support for Xray
-  LUCI_PKGARCH:=all
-  PKG_NAME:=luci-app-xray
-  PKG_VERSION:=1.0
-  PKG_RELEASE:=1
+          git clone https://github.com/yichya/luci-app-xray.git temp-luci
+          # 将 status 目录改名为 luci-app-xray
+          mv temp-luci/status sdk/package/luci-app-xray/files
+          # 创建 Makefile
+          cat > sdk/package/luci-app-xray/Makefile <<'EOF'
+          include $(TOPDIR)/rules.mk
 
-  include $(INCLUDE_DIR)/package.mk
+          LUCI_TITLE:=XRay LuCI App
+          LUCI_DEPENDS:=+xray-core
+          PKG_NAME:=luci-app-xray
+          PKG_VERSION:=1.0
+          PKG_RELEASE:=1
 
-  define Package/luci-app-xray
-    SECTION:=luci
-    CATEGORY:=LuCI
-    TITLE:=LuCI support for Xray
-    DEPENDS:=+luci-base
-  endef
+          include $(INCLUDE_DIR)/package.mk
 
-  define Package/luci-app-xray/description
-    LuCI application for Xray.
-  endef
+          define Package/luci-app-xray
+              SECTION:=luci
+              CATEGORY:=LuCI
+              TITLE:=$(LUCI_TITLE)
+              DEPENDS:=$(LUCI_DEPENDS)
+          endef
 
-  define Build/Compile
-    true
-  endef
+          define Package/luci-app-xray/description
+              LuCI interface for XRay
+          endef
 
-  define Package/luci-app-xray/install
-    $(INSTALL_DIR) $(1)/usr/lib/lua/luci/controller
-    cp -r ./luci/controller/* $(1)/usr/lib/lua/luci/controller/
-    $(INSTALL_DIR) $(1)/usr/lib/lua/luci/view/xray
-    cp -r ./luci/view/xray/* $(1)/usr/lib/lua/luci/view/xray/
-  endef
+          define Build/Compile
+          endef
 
-  $(eval $(call BuildPackage,luci-app-xray))
-EOF
+          define Package/luci-app-xray/install
+              $(CP) -r ./files/* $(1)/usr/lib/lua/luci/
+          endef
+
+          $(eval $(call BuildPackage,luci-app-xray))
+          EOF
 
       - name: Configure minimal build
         run: |
           cd sdk
           rm -f .config
-          cat >> .config <<EOF
-          CONFIG_TARGET_mediatek=y
-          CONFIG_TARGET_mediatek_filogic=y
-          CONFIG_TARGET_mediatek_filogic_generic=y
-          CONFIG_PACKAGE_luci-app-xray=m
-          EOF
+          echo "CONFIG_TARGET_mediatek=y" >> .config
+          echo "CONFIG_TARGET_mediatek_filogic=y" >> .config
+          echo "CONFIG_TARGET_mediatek_filogic_generic=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-xray=m" >> .config
           make defconfig
 
       - name: Build luci-app-xray
