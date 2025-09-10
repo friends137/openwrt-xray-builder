@@ -2,9 +2,6 @@ name: Build Xray for ImmortalWrt (mediatek/filogic)
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 jobs:
   build:
@@ -39,16 +36,22 @@ jobs:
       - name: Configure Package Selection
         run: |
           cd sdk
-          # Enable xray-core & luci-app-xray
+          # 禁用 gensio 循环依赖
+          echo "# CONFIG_PACKAGE_gensio is not set" >> .config
+          echo "# CONFIG_PACKAGE_gensio-bin is not set" >> .config
+          echo "# CONFIG_GENSIO_SSHD is not set" >> .config
+          # 启用 xray-core / geodata / luci-app-xray
           echo "CONFIG_PACKAGE_xray-core=m" >> .config
+          echo "CONFIG_PACKAGE_xray-geodata=m" >> .config
           echo "CONFIG_PACKAGE_luci-app-xray=m" >> .config
           make defconfig
 
       - name: Compile Xray Packages
         run: |
           cd sdk
-          make package/xray-core/{clean,compile} -j$(nproc) V=s
-          make package/luci-app-xray/{clean,compile} -j$(nproc) V=s
+          make package/feeds/xray/xray-core/{clean,compile} -j$(nproc) V=s
+          make package/feeds/xray/xray-geodata/{clean,compile} -j$(nproc) V=s
+          make package/feeds/xray/luci-app-xray/{clean,compile} -j$(nproc) V=s
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
@@ -56,25 +59,5 @@ jobs:
           name: xray-ipk-filgic
           path: |
             sdk/bin/packages/*/base/xray-core_*.ipk
+            sdk/bin/packages/*/base/xray-geodata_*.ipk
             sdk/bin/packages/*/luci/luci-app-xray_*.ipk
-
-  release:
-    needs: build
-    runs-on: ubuntu-22.04
-    if: github.ref == 'refs/heads/main'
-
-    steps:
-      - name: Download Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: xray-ipk-filgic
-          path: release
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: "xray-filgic-$(date +'%Y%m%d')"
-          name: "Xray ImmortalWrt (filogic) $(date +'%Y-%m-%d')"
-          draft: false
-          prerelease: false
-          files: release/*.ipk
