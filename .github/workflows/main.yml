@@ -28,21 +28,27 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Clone xray feed
+      - name: Clone xray packages
+        run: |
+          cd sdk/package
+          git clone https://github.com/yichya/openwrt-xray.git
+          # 里面包含 xray-core 和 luci-app-xray
+
+      - name: Patch config to avoid gensio/busybox errors
         run: |
           cd sdk
-          git clone https://github.com/yichya/openwrt-xray.git package/xray
+          # 硬删除 gensio，避免递归依赖
+          rm -rf feeds/packages/net/gensio || true
+          # 删除 busybox PAM 依赖
+          sed -i '/BUSYBOX_CONFIG_PAM/d' feeds/base/package/utils/busybox/config/Config.in || true
 
       - name: Configure
         run: |
           cd sdk
-          # 强制启用 xray-core 和 luci-app-xray
-          echo "CONFIG_PACKAGE_xray-core=m" >> .config
-          echo "CONFIG_PACKAGE_luci-app-xray=m" >> .config
-          # 删除有问题的依赖
-          sed -i '/GENSIO_SSHD/d' .config || true
-          sed -i '/PACKAGE_gensio-bin/d' .config || true
-          sed -i '/BUSYBOX_CONFIG_PAM/d' .config || true
+          cat >> .config <<EOF
+          CONFIG_PACKAGE_xray-core=m
+          CONFIG_PACKAGE_luci-app-xray=m
+          EOF
           make defconfig
 
       - name: Build
