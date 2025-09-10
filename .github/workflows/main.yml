@@ -25,12 +25,14 @@ jobs:
           tar -I zstd -xf immortalwrt-sdk-mediatek-filogic_gcc-14.3.0_musl.Linux-x86_64.tar.zst
           mv immortalwrt-sdk-*/ sdk
 
-      - name: Clone luci-app-xray only
+      - name: Clone openwrt-xray
         run: |
           cd sdk/package
           git clone https://github.com/yichya/openwrt-xray.git
-          # 只需要 luci-app-xray，其他目录可以删掉
-          find openwrt-xray -maxdepth 1 -type d ! -name luci-app-xray ! -name openwrt-xray -exec rm -rf {} +
+          # 把 status 目录改名为 luci-app-xray
+          mv openwrt-xray/status openwrt-xray/luci-app-xray
+          # 删除 core / geodata，避免干扰
+          rm -rf openwrt-xray/core openwrt-xray/geodata
 
       - name: Configure minimal build
         run: |
