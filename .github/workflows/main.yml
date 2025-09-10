@@ -32,30 +32,31 @@ jobs:
           cd sdk
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-          # 删除有问题的 gensio 包
+          # 删除有问题的包
           rm -rf feeds/packages/net/gensio
+          rm -rf package/utils/busybox
 
       - name: Configure Package Selection
         run: |
           cd sdk
-          # 启用 xray-core / geodata / luci-app-xray
-          echo "CONFIG_PACKAGE_xray-core=m" >> .config
-          echo "CONFIG_PACKAGE_xray-geodata=m" >> .config
-          echo "CONFIG_PACKAGE_luci-app-xray=m" >> .config
+          make defconfig
+          ./scripts/config --enable PACKAGE_xray-core
+          ./scripts/config --enable PACKAGE_xray-geodata
+          ./scripts/config --enable PACKAGE_luci-app-xray
           make defconfig
 
       - name: Compile Xray Packages
         run: |
           cd sdk
-          make package/feeds/xray/core/{clean,compile} -j$(nproc) V=s
-          make package/feeds/xray/geodata/{clean,compile} -j$(nproc) V=s
-          make package/feeds/xray/status/{clean,compile} -j$(nproc) V=s
+          make package/xray-core/{clean,compile} -j$(nproc) V=s
+          make package/xray-geodata/{clean,compile} -j$(nproc) V=s
+          make package/luci-app-xray/{clean,compile} -j$(nproc) V=s
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: xray-ipk-filgic
           path: |
-            sdk/bin/packages/*/base/xray-core_*.ipk
-            sdk/bin/packages/*/base/xray-geodata_*.ipk
-            sdk/bin/packages/*/luci/luci-app-xray_*.ipk
+            sdk/bin/packages/*/*/xray-core_*.ipk
+            sdk/bin/packages/*/*/xray-geodata_*.ipk
+            sdk/bin/packages/*/*/luci-app-xray_*.ipk
